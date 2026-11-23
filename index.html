@@ -65,7 +65,7 @@ const LIFF_ID = '2012762100-MDD2iVkw';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbz9djrb8oKq1ag8E7e505eFn8BEtFnhYhb-JaXA1GbuZ2bEQTUPr5GD0bD7zAFf5_uU/exec';
 // ▲ここまで
 
-const state = { isStaff: false, last: null, tab: "events", events: [], draft: null, maxPeople: 10 };
+const state = { isStaff: false, isAdmin: false, depts: [], assignable: [], staffName: "", last: null, tab: "events", events: [], draft: null, maxPeople: 10 };
 const view = document.getElementById("view");
 
 // ---------- 共通 ----------
@@ -152,7 +152,15 @@ function go(tab) {
 function eventInfo(ev) {
   let html = `<p class="meta">📅 ${esc(ev.dateLabel)}${ev.time ? " " + esc(ev.time) : ""}</p>`;
   if (ev.place) html += `<p class="meta">📍 ${esc(ev.place)}</p>`;
+  if (ev.dept) html += `<p class="meta">👥 担当：${esc(ev.dept)}</p>`;
   return html;
+}
+
+function setStaff(info) {
+  state.isStaff = !!info.isStaff;
+  state.isAdmin = !!info.isAdmin;
+  state.depts = info.depts || [];
+  state.assignable = info.assignable || [];
 }
 
 // ---------- イベント一覧 ----------
@@ -403,23 +411,27 @@ async function showMine() {
 
 // ---------- 担当者登録 ----------
 function showStaffRegister(err) {
+  const more = state.isStaff;
   view.innerHTML = `${err ? errorBox(err) : ""}<div class="card">
-    <h2>担当者の登録</h2>
-    <p class="muted">役員から聞いた合言葉を入れると、この画面に「担当者」タブが出るようになります。登録は1回だけです。</p>
-    <label>お名前</label><input id="s-name">
+    <h2>${more ? "別の部の担当者としても登録" : "担当者の登録"}</h2>
+    <p class="muted">${more
+      ? `いまの担当：${esc(state.depts.join("、"))}。もう1つの部の合言葉を入れると、その部のイベントも扱えるようになります。`
+      : "所属する部の合言葉（部の役員から聞いたもの）を入れると、その部のイベントを扱う「担当者」タブが出るようになります。"}</p>
+    <label>お名前</label><input id="s-name" value="${esc(state.staffName || "")}">
     <label>合言葉</label><input id="s-code" autocomplete="off">
     <button class="primary" id="s-submit">登録する</button>
   </div>
   <button class="link" id="back">← 戻る</button>`;
-  document.getElementById("back").onclick = () => go("mine");
+  document.getElementById("back").onclick = () => go(more ? "staff" : "mine");
   document.getElementById("s-submit").onclick = async () => {
     try {
-      await api("staffRegister", {
-        name: document.getElementById("s-name").value,
-        code: document.getElementById("s-code").value,
-      });
-      state.isStaff = true;
-      go("staff");
+      const name = document.getElementById("s-name").value;
+      const r = await api("staffRegister", { name, code: document.getElementById("s-code").value });
+      setStaff(r);
+      state.staffName = name;
+      state.tab = "staff";
+      renderTabs();
+      showStaff(`${r.registered}の担当者として登録しました。`);
     } catch (e) {
       showStaffRegister(e);
     }
@@ -431,8 +443,15 @@ async function showStaff(notice) {
   loading();
   try {
     const r = await api("staffEvents");
+    setStaff(r);
+    if (!r.isStaff) { go("mine"); return; }
     let html = notice ? `<div class="msg info">${esc(notice)}</div>` : "";
+    html += `<p class="muted">${r.isAdmin ? "管理者として、すべての部のイベントを扱えます。" : `担当：${esc(r.depts.join("、"))}のイベントを扱えます。`}
+      <button class="link" id="more-dept">別の部も担当する</button></p>`;
+    const deptOptions = r.assignable.map(d => `<option>${esc(d)}</option>`).join("");
     html += `<div class="card"><details id="add-box"><summary>＋ イベントを登録する</summary>
+      <label>担当部<span class="req">必須</span></label>
+      <select id="e-dept">${r.assignable.length > 1 ? `<option value="">選んでください</option>` : ""}${deptOptions}</select>
       <label>イベント名<span class="req">必須</span></label><input id="e-name">
       <label>開催日<span class="req">必須</span></label><input id="e-date" type="date">
       <label>時間</label><input id="e-time" placeholder="例：9:00〜12:00">
@@ -442,9 +461,10 @@ async function showStaff(notice) {
       <label>定員（人）</label><input id="e-cap" inputmode="numeric" placeholder="制限なしなら空欄">
       <button class="primary" id="e-submit">登録する</button>
     </details></div>`;
-    if (!r.events.length) html += `<div class="card center muted">登録されたイベントはありません。</div>`;
+    if (!r.events.length) html += `<div class="card center muted">担当のイベントはまだありません。</div>`;
     r.events.forEach(ev => {
       const s = ev.summary;
+      if (!ev.dept) ev.dept = "（未設定：シートで担当部を入れてください）";
       const capText = ev.capacity ? ` / 定員${ev.capacity}人` : " / 定員なし";
       let buttons = "";
       if (!ev.past && ev.status !== "中止") {
@@ -467,6 +487,7 @@ async function showStaff(notice) {
     });
     view.innerHTML = html;
     document.getElementById("e-submit").onclick = addEvent;
+    document.getElementById("more-dept").onclick = () => showStaffRegister();
     view.querySelectorAll("[data-list]").forEach(b => b.onclick = () => showApplicants(b.dataset.list));
     view.querySelectorAll("[data-status]").forEach(b => b.onclick = () => changeStatus(b.dataset.id, b.dataset.status, b));
     view.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => changeCapacity(b));
@@ -481,7 +502,7 @@ async function addEvent() {
   btn.disabled = true;
   try {
     await api("staffAddEvent", {
-      name: v("e-name"), date: v("e-date"), time: v("e-time"), place: v("e-place"),
+      dept: v("e-dept"), name: v("e-name"), date: v("e-date"), time: v("e-time"), place: v("e-place"),
       detail: v("e-detail"), deadline: v("e-deadline"), capacity: v("e-cap"),
     });
     showStaff("イベントを登録しました。参加者の画面に表示されます。");
@@ -580,7 +601,7 @@ async function main() {
       return;
     }
     const me = await api("whoami");
-    state.isStaff = me.isStaff;
+    setStaff(me);
     state.last = me.last;
     go("events");
   } catch (e) {
