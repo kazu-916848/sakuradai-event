@@ -362,7 +362,7 @@ async function showMine() {
       }
     });
     const reg = document.getElementById("staff-reg");
-    if (reg) reg.onclick = showStaffRegister;
+    if (reg) reg.onclick = () => showStaffRegister();
   } catch (e) {
     view.innerHTML = errorBox(e);
   }
