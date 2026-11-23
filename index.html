@@ -137,9 +137,11 @@ async function showEvents(notice) {
       if (ev.deadlineLabel) foot += `申込締切：${esc(ev.deadlineLabel)}　`;
       if (ev.capacity) foot += `定員${ev.capacity}人（残り${ev.remaining}人）`;
       if (ev.waiting) foot += `　キャンセル待ち${ev.waiting}組`;
-      let badge = ev.state, cls = badgeClass(ev.state);
-      if (ev.applied === "申込") { badge = "申込済み"; cls = "badge"; }
-      else if (ev.applied === "キャンセル待ち") { badge = "キャンセル待ち中"; cls = "badge warn"; }
+      // 自分の申込の状態と、イベントの受付状態を並べて出す（申込済みでも満員などがわかるように）
+      let badges = "";
+      if (ev.applied === "申込") badges += `<span class="badge">申込済み</span>`;
+      else if (ev.applied === "キャンセル待ち") badges += `<span class="badge warn">キャンセル待ち中</span>`;
+      if (!ev.applied || ev.state !== "受付中") badges += `<span class="${badgeClass(ev.state)}">${esc(ev.state)}</span>`;
       let button = "";
       if (!ev.applied && ev.mode === "apply") {
         button = `<button class="primary" data-apply="${esc(ev.id)}">申し込む</button>`;
@@ -148,7 +150,7 @@ async function showEvents(notice) {
           <button class="secondary" data-apply="${esc(ev.id)}">キャンセル待ちで申し込む</button>`;
       }
       html += `<div class="card">
-        <h2>${esc(ev.name)}<span class="${cls}">${esc(badge)}</span></h2>
+        <h2>${esc(ev.name)}${badges}</h2>
         ${eventInfo(ev)}
         ${ev.detail ? `<p class="detail">${esc(ev.detail)}</p>` : ""}
         ${foot ? `<p class="muted">${foot}</p>` : ""}
