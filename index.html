@@ -48,6 +48,10 @@
   .link { background: none; border: none; color: var(--main); text-decoration: underline; font-size: 15px; padding: 8px 0; }
   details summary { font-weight: bold; color: var(--main); padding: 4px 0; }
   .spinner { text-align: center; color: var(--sub); padding: 40px 0; }
+  .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .dialog { background: #fff; border-radius: 12px; padding: 20px 16px 16px; width: 100%; max-width: 420px; }
+  .dialog p { margin: 0 0 8px; white-space: pre-wrap; }
+  .dialog input { margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -93,6 +97,33 @@ function loading(text) {
 function errorBox(e) {
   return `<div class="msg error">${esc(e && e.message ? e.message : e)}</div>`;
 }
+
+// 画面の中に出す確認・入力・お知らせ。
+// （ブラウザ標準のダイアログはサイトのアドレスが表示されるため使わない）
+// 戻り値：確認 → true／false、入力 → 入力した文字／null、お知らせ → true
+function dialog({ message, okText = "OK", cancelText = null, danger = false, input = null }) {
+  return new Promise(resolve => {
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.innerHTML = `<div class="dialog" role="dialog" aria-modal="true">
+      <p>${esc(message)}</p>
+      ${input ? `<input id="dlg-input" value="${esc(input.value || "")}" placeholder="${esc(input.placeholder || "")}"${input.numeric ? ' inputmode="numeric"' : ""}>` : ""}
+      <div class="row-buttons">
+        ${cancelText ? `<button class="secondary" id="dlg-cancel">${esc(cancelText)}</button>` : ""}
+        <button class="${danger ? "danger" : "primary"}" id="dlg-ok">${esc(okText)}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    const field = ov.querySelector("#dlg-input");
+    const close = value => { ov.remove(); resolve(value); };
+    ov.querySelector("#dlg-ok").onclick = () => close(input ? field.value : true);
+    const cancel = ov.querySelector("#dlg-cancel");
+    if (cancel) cancel.onclick = () => close(input ? null : false);
+    if (field) field.focus();
+  });
+}
+const alertBox = message => dialog({ message });
+const confirmBox = (message, okText, danger) => dialog({ message, okText: okText || "はい", cancelText: "やめる", danger });
 
 function badgeClass(s) {
   if (s === "受付中") return "badge";
@@ -314,7 +345,7 @@ async function submitApply() {
   } catch (e) {
     // 送信の間に定員を超えた場合は、キャンセル待ちでよいか確かめて送り直す
     if (e.data && e.data.needWaitlist && !d.wait) {
-      if (confirm(e.message)) {
+      if (await confirmBox(e.message, "キャンセル待ちで申し込む")) {
         d.wait = true;
         submitApply();
       } else {
@@ -353,14 +384,14 @@ async function showMine() {
     if (!state.isStaff) html += `<p class="center"><button class="link" id="staff-reg">担当者の方はこちら</button></p>`;
     view.innerHTML = html;
     view.querySelectorAll("[data-cancel]").forEach(b => b.onclick = async () => {
-      if (!confirm("この申込を取り消します。よろしいですか？")) return;
+      if (!(await confirmBox("この申込を取り消します。よろしいですか？", "取り消す", true))) return;
       b.disabled = true;
       try {
         await api("cancel", { id: b.dataset.cancel });
         showMine();
       } catch (e) {
         b.disabled = false;
-        alert(e.message);
+        alertBox(e.message);
       }
     });
     const reg = document.getElementById("staff-reg");
@@ -456,16 +487,21 @@ async function addEvent() {
     showStaff("イベントを登録しました。参加者の画面に表示されます。");
   } catch (e) {
     btn.disabled = false;
-    alert(e.message);
+    alertBox(e.message);
   }
 }
 
 async function changeStatus(eventId, status, btn) {
   let reason = "";
   if (status === "中止") {
-    reason = prompt("中止の理由（申込者へのお知らせに書きます。空欄でも可）", "");
+    reason = await dialog({
+      message: "中止の理由を入れてください。申込者へのお知らせに書きます（空欄でも構いません）。",
+      input: { placeholder: "例：雨天のため" },
+      okText: "次へ", cancelText: "やめる",
+    });
     if (reason === null) return;
-    if (!confirm("中止にすると、申込者全員にLINEでお知らせが届きます。元には戻せません。よろしいですか？")) return;
+    const ok = await confirmBox("中止にすると、申込者全員（キャンセル待ちの方を含む）にLINEでお知らせが届きます。元には戻せません。中止にしますか？", "中止にする", true);
+    if (!ok) return;
   }
   btn.disabled = true;
   try {
@@ -473,13 +509,17 @@ async function changeStatus(eventId, status, btn) {
     showStaff(status === "中止" ? `中止にしました。${r.notified}人の申込者にお知らせを送りました。` : `「${status}」にしました。`);
   } catch (e) {
     btn.disabled = false;
-    alert(e.message);
+    alertBox(e.message);
   }
 }
 
 async function changeCapacity(btn) {
   const current = btn.dataset.current;
-  const input = prompt(`新しい定員（人）を入れてください。今は${current ? current + "人" : "定員なし"}、参加決定は${btn.dataset.people}人です。\n空欄にすると定員なしになります。\n増やすと、キャンセル待ちの方が申し込んだ順に繰り上がり、LINEでお知らせが届きます。`, current);
+  const input = await dialog({
+    message: `新しい定員（人）を入れてください。\n今は${current ? current + "人" : "定員なし"}、参加決定は${btn.dataset.people}人です。\n空欄にすると定員なしになります。\n増やすと、キャンセル待ちの方が申し込んだ順に繰り上がり、LINEでお知らせが届きます。`,
+    input: { value: current, placeholder: "制限なしなら空欄", numeric: true },
+    okText: "変更する", cancelText: "やめる",
+  });
   if (input === null) return;
   btn.disabled = true;
   try {
@@ -487,7 +527,7 @@ async function changeCapacity(btn) {
     showStaff(`定員を変更しました。${r.promoted ? `キャンセル待ちから${r.promoted}件（${r.promotedPeople}人）を繰り上げ、お知らせを送りました。` : ""}`);
   } catch (e) {
     btn.disabled = false;
-    alert(e.message);
+    alertBox(e.message);
   }
 }
 
